@@ -1,0 +1,388 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:munit="http://www.mulesoft.org/schema/mule/munit" xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+    xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+    xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+		http://www.mulesoft.org/schema/mule/munit-tools  http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd">
+    <munit:config name="test-suite.xml" />
+    <configuration-properties doc:name="Configuration properties" doc:id="cd3c5714-cd77-4aaf-9d27-6c76f64980e3" file="mule.test.properties" />
+	<munit:test name="ordersMigrationTest" description="Test migrating orders from different customers" doc:id="385ee2ed-ed30-4eb5-9a72-585835d8b09f">
+		<munit:enable-flow-sources >
+			<munit:enable-flow-source value="businessLogicFlow" />
+		</munit:enable-flow-sources>
+		<munit:execution >
+			<ee:transform doc:name="Set variables" doc:id="6e0bb64b-a5ab-4a1b-abf3-c86deeddeee8">
+				<ee:message>
+				</ee:message>
+				<ee:variables>
+                    <ee:set-variable variableName="addOrder"><![CDATA[%dw 2.0
+output application/java
+var index = randomInt(1000)
+---
+{
+    "accountName": "sap2sfdc account - " ++ index,
+    "productCode": "000000000000000001",
+    "productName": "sap2sfdc test product - " ++ index,
+    "orderId": "0000000001",
+    "quantity": "1.0"
+}]]></ee:set-variable>
+					<ee:set-variable variableName="updateOrder"><![CDATA[%dw 2.0
+output application/java
+var index = randomInt(1000)
+---
+{
+	"accountName": "sap2sfdc account - " ++ index,
+	"productCode": "000000000000000002",
+	"productName": "sap2sfdc test product - " ++ index,
+	"orderId": "0000000002",
+	"quantity": "1.0",
+	"newQuantity": "2.0"
+}]]></ee:set-variable>
+					<ee:set-variable variableName="lastQueryTimestamp"><![CDATA[now()]]></ee:set-variable>
+				</ee:variables>
+			</ee:transform>
+			<flow-ref doc:name="Create test order" doc:id="c98174b7-629c-40d2-bb67-61d2b6cced17" name="createTestOrderSubFlow"/>
+			<flow-ref doc:name="Call querySubFlow" doc:id="c784160e-02b7-47d1-a60d-85cd02691f8a" name="querySubFlow"/>
+			<ee:transform doc:name="Set payload" doc:id="a121c8f1-274d-4398-8ccc-38f6bd63b627" >
+				<ee:message >
+					<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+[
+  {
+	"orderId": vars.addOrder.orderId,
+	"effectiveDate": now(),
+	"status": "Completed",
+	"account": {
+		"name": vars.addOrder.accountName
+	},
+	"products": [
+      {
+		"productCode": vars.addOrder.productCode,
+		"quantity": vars.addOrder.quantity,
+		"price": "1.00",
+		"currency": "USD",
+		"productName": vars.addOrder.productName,
+		"deliveryDate": now()
+	  }
+    ]
+  },
+  {
+    "orderId": vars.updateOrder.orderId,
+    "effectiveDate": now(),
+    "status": "Completed",
+    "account": {
+        "name": vars.updateOrder.accountName
+    },
+    "products": [
+      {
+        "productCode": vars.updateOrder.productCode,
+        "quantity": vars.updateOrder.newQuantity,
+        "price": "1.00",
+        "currency": "USD",
+        "productName": vars.updateOrder.productName,
+        "deliveryDate": now()
+      }
+    ]
+  }
+]]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+            <flow-ref doc:name="Call businessLogicFlow" doc:id="d8540205-afcc-4244-87ff-6ef2f073926d" name="businessLogicFlow" />
+            <scripting:execute engine="Groovy" doc:name="Sleep for 30s until the processing is completed" doc:id="bb54f4d1-10d0-43d4-b2a4-63c4d36a2579">
+                <scripting:code>sleep(30000)</scripting:code>
+            </scripting:execute>
+			<flow-ref doc:name="Query crerated order" doc:id="315a9439-4d8a-4b22-bc6f-3b5ae4e6383b" name="queryTestOrderSubFlow"/>
+            <salesforce:query doc:name="Query updated OrderItems" doc:id="03f134d4-b0bc-43f9-8be1-d519590c12c6" config-ref="Salesforce_Config"
+                target="updatedOrderItems">
+                <salesforce:salesforce-query>SELECT Id, Quantity FROM OrderItem WHERE Order.SAP4HANA_Order_Key__c=':orderId'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"orderId" : vars.updateOrder.orderId
+}]]]></salesforce:parameters>
+            </salesforce:query>
+			<flow-ref doc:name="Delete test orders" doc:id="d9bd2abe-7b55-435b-b903-d67b37f22f8a" name="deleteTestOrdersSubFlow"/>
+		</munit:execution>
+		<munit:validation >
+			<munit-tools:assert-that doc:name="Assert that Account exists in Salesforce" doc:id="3214d715-bda9-415c-a42b-5893c076d650"
+                expression="#[vars.result.account]" is="#[MunitTools::notNullValue()]" message="Account doesn't exist in Salesforce" />
+            <munit-tools:assert-that doc:name="Assert that Contract exists in Salesforce" doc:id="81693908-99d8-414f-b040-dd75fc35cf29"
+                expression="#[vars.result.contract]" is="#[MunitTools::notNullValue()]" message="Contact doesn't exist in Salesforce" />
+            <munit-tools:assert-that doc:name="Assert that Product exists in Salesforce" doc:id="a1f7bf1b-2cc8-48d7-9037-0c9e9038a36c"
+                expression="#[vars.result.product]" is="#[MunitTools::notNullValue()]" message="Product doesn't exist in Salesforce" />
+            <munit-tools:assert-that doc:name="Assert that Pricebookentry exists in Salesforce" doc:id="c3c6c323-8ea0-4337-81b9-eca5e1ca0370"
+                expression="#[vars.result.pricebookEntry]" is="#[MunitTools::notNullValue()]" message="Pricebookentry doesn't exist in Salesforce" />
+            <munit-tools:assert-that doc:name="Assert that Order exists in Salesforce" doc:id="c05fb8fa-a219-433a-b10f-c2ce10ee7c20"
+                expression="#[vars.result.order]" is="#[MunitTools::notNullValue()]" message="Order doesn't exist in Salesforce" />
+            <munit-tools:assert-that doc:name="Assert that OrderItems exist in Salesforce" doc:id="61465abf-4554-4039-a8b0-388f9698d8d7"
+                expression="#[sizeOf(vars.result.orderItems)]" is="#[MunitTools::equalTo(1)]" message="OrderItems don't exist in Salesforce" />
+            <munit-tools:assert-that doc:name="Assert that OrderItem was updated" doc:id="7231a071-dbaa-442f-b707-bacb88b54b50"
+                expression="#[vars.updatedOrderItems[0].Quantity]" is="#[MunitTools::equalTo(vars.updateOrder.newQuantity)]" message="OrderItem wasn't updated" />
+			<munit-tools:verify-call doc:name="Verify s4hana query call" doc:id="d3994dac-cb4c-45b6-b1da-7b30c468956d" processor="s4hana:query" atLeast="1"/>
+		</munit:validation>
+	</munit:test>
+	<sub-flow name="createTestOrderSubFlow" doc:id="79aee6fa-68cb-469b-98a5-8372586bdcbb">
+        <salesforce:create doc:name="Create Account" doc:id="85417166-64bd-42ca-91d0-e47b53ba53cb" config-ref="Salesforce_Config" type="Account" target="accountId" targetValue="#[payload[0].Id]">
+            <salesforce:records><![CDATA[#[[{
+    "name": vars.updateOrder.accountName
+}]]]]></salesforce:records>
+        </salesforce:create>
+		<salesforce:create type="Contract" doc:name="Create Contract" doc:id="f40e0c31-a603-4098-b6f9-cde349710e1f" config-ref="Salesforce_Config" target="contractId" targetValue="#[payload[0].Id]">
+            <salesforce:records><![CDATA[#[[{
+	"ContractTerm": 1000,
+	"AccountId": vars.accountId,
+	"Pricebook2Id": p('sfdc.pricebook.id')
+}]]]]></salesforce:records>
+        </salesforce:create>
+		<salesforce:create doc:name="Create Product" doc:id="84112968-6f20-4ff3-b3c6-f60ccc724352" config-ref="Salesforce_Config" type="Product2" target="productId" targetValue="#[payload[0].Id]">
+            <salesforce:records><![CDATA[#[[
+	{
+		"Name": vars.updateOrder.productName,
+		"ProductCode": vars.updateOrder.productCode
+	}
+]]]]></salesforce:records>
+        </salesforce:create>
+		<salesforce:create doc:name="Create Pricebookentry" doc:id="2181289b-55dc-44ee-93f4-4ea575243702" config-ref="Salesforce_Config" type="Pricebookentry" targetValue="#[payload[1].Id]" target="pricebookentryId">
+            <salesforce:records><![CDATA[#[[
+	{
+		"Product2Id": vars.productId,
+		"Pricebook2Id" : p('sfdc.pricebook.standard.id'),
+		"UnitPrice" : "1"
+	},
+	{
+		"Product2Id": vars.productId,
+		"Pricebook2Id" : p('sfdc.pricebook.id'),
+		"UnitPrice" : "1",
+		"UseStandardPrice" : false
+	}
+]]]]></salesforce:records>
+        </salesforce:create>
+		<salesforce:create doc:name="Create Order" doc:id="e82865ec-1fd4-45ee-8a66-fb7b3162c5e5" config-ref="Salesforce_Config" type="Order" target="sfdcOrderId" targetValue="#[payload[0].Id]">
+            <salesforce:records><![CDATA[#[[  
+	{
+		"Status": "Completed",
+		"SAP4HANA_Order_Key__c": vars.updateOrder.orderId,
+		"AccountId": vars.accountId,
+		"ContractId": vars.contractId,
+		"EffectiveDate": now(),
+		"Pricebook2Id" : p('sfdc.pricebook.id')
+	}
+]]]]></salesforce:records>
+        </salesforce:create>
+		<salesforce:create type="OrderItem" doc:name="Create OrderItem" doc:id="d7fc6f8d-2dba-42dc-80ca-f21e0509c02e" config-ref="Salesforce_Config">
+            <salesforce:records><![CDATA[#[[{
+	"Quantity": vars.updateOrder.quantity,
+	"Product2Id": vars.productId,
+	"OrderId": vars.sfdcOrderId,
+	"UnitPrice": "1",
+	"ServiceDate": now(),
+	"PricebookEntryId": vars.pricebookentryId,
+}]]]]></salesforce:records>
+        </salesforce:create>
+    </sub-flow>
+	<sub-flow name="queryTestOrderSubFlow" doc:id="4a4fd52b-c1c6-4762-92f9-94edcb159ecb" >
+		<salesforce:query doc:name="Query Account" doc:id="1ee90a05-88a7-4a28-835e-3734a2409d46" config-ref="Salesforce_Config"
+                targetValue="#[if (isEmpty(payload)) null else payload[0]]" target="sfdcAccount">
+                <salesforce:salesforce-query>SELECT Id FROM Account WHERE Name=':name'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"name" : vars.addOrder.accountName
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            <salesforce:query doc:name="Query Contract" doc:id="6eadf7ac-4c2f-40eb-8188-3ddd130047c1" config-ref="Salesforce_Config"
+                target="sfdcContract" targetValue="#[if (isEmpty(payload)) null else payload[0]]">
+                <salesforce:salesforce-query>SELECT Id FROM Contract WHERE AccountId=':id'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"id" : vars.sfdcAccount.Id
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            <salesforce:query doc:name="Query Product" doc:id="6aa0a4d2-f7fd-453e-a6e1-c414135dbdd6" config-ref="Salesforce_Config"
+                target="sfdcProduct" targetValue="#[if (isEmpty(payload)) null else payload[0]]">
+                <salesforce:salesforce-query>SELECT Id FROM Product2 WHERE ProductCode=':code' AND Name=':name'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"code" : vars.addOrder.productCode,
+	"name" : vars.addOrder.productName
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            <salesforce:query doc:name="Query Pricebookentry" doc:id="237bedf5-7c26-429e-b713-5a165d957c66" config-ref="Salesforce_Config"
+                target="sfdcPricebookentry" targetValue="#[if (isEmpty(payload)) null else payload[0]]">
+                <salesforce:salesforce-query>SELECT Id FROM Pricebookentry WHERE Product2.Name=':productName' AND Pricebook2Id=':pricebookId'
+                </salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"productName" : vars.addOrder.productName,
+	"pricebookId" : p('sfdc.pricebook.id')
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            <salesforce:query doc:name="Query Order" doc:id="728fa3a8-5bc0-4352-9085-b18c135282d7" config-ref="Salesforce_Config"
+                target="sfdcOrder" targetValue="#[if (isEmpty(payload)) null else payload[0]]">
+                <salesforce:salesforce-query>SELECT Id FROM Order WHERE SAP4HANA_Order_Key__c=':id'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"id" : vars.addOrder.orderId
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            <salesforce:query doc:name="Query OrderItems" doc:id="87597590-8a9f-405d-96a6-00e8006bb2e1" config-ref="Salesforce_Config"
+                target="sfdcOrderItems">
+                <salesforce:salesforce-query>SELECT Id FROM OrderItem WHERE Order.SAP4HANA_Order_Key__c=':orderId'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"orderId" : vars.addOrder.orderId
+}]]]></salesforce:parameters>
+            </salesforce:query>
+		<ee:transform doc:name="Set result" doc:id="cf5c1bb3-e61c-4172-8dea-72847967f47b" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="result" ><![CDATA[%dw 2.0
+output application/java
+---
+{
+	"account": vars.sfdcAccount,
+	"contract": vars.sfdcContract,
+	"product": vars.sfdcProduct,
+	"pricebookEntry": vars.sfdcPricebookentry,
+	"order": vars.sfdcOrder,
+	"orderItems": vars.sfdcOrderItems
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+    </sub-flow>
+	<sub-flow name="deleteTestOrdersSubFlow" doc:id="806a89c7-cbe9-48f2-9d21-c5f51090e3f8" >
+        <salesforce:query doc:name="Query Accounts" doc:id="09855b98-61cc-4289-b84e-5d793083a607" config-ref="Salesforce_Config" target="accountIds" targetValue="#[payload.Id]">
+                <salesforce:salesforce-query>SELECT Id FROM Account WHERE Name in (':account1', ':account2')</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"account1" : vars.addOrder.accountName,
+	"account2" : vars.updateOrder.accountName
+}]]]></salesforce:parameters>
+        </salesforce:query>
+        <salesforce:query doc:name="Query Products" doc:id="bba7def8-a545-4b86-9bc9-71e0afc11ff8" config-ref="Salesforce_Config" target="productIds" targetValue="#[payload.Id]">
+            <salesforce:salesforce-query>SELECT Id FROM Product2 WHERE Name in (':product1', ':product2')</salesforce:salesforce-query>
+            <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"product1" : vars.addOrder.productName,
+	"product2" : vars.updateOrder.productName
+}]]]></salesforce:parameters>
+        </salesforce:query>
+        <salesforce:delete doc:name="Delete Test Orders" doc:id="11c1b802-d1bd-4955-b864-9094dd2bad48" config-ref="Salesforce_Config">
+            <salesforce:delete-ids><![CDATA[#[vars.accountIds ++ vars.productIds]]]></salesforce:delete-ids>
+        </salesforce:delete>
+    </sub-flow>
+	<munit:test name="manyProductsTest" description="Test migrationg order with many products" doc:id="d91b741b-07bd-4545-8de4-e1a539215547">
+		<munit:execution >
+			<ee:transform doc:name="Set variables" doc:id="c3ab9259-191a-4551-8f25-3094aa379b0c" >
+				<ee:message >
+				</ee:message>
+				<ee:variables >
+					<ee:set-variable variableName="testOrder" ><![CDATA[%dw 2.0
+output application/java
+var index = randomInt(1000)
+---
+{
+	"accountName": "sap2sfdc account - " ++ index,
+	"orderId": "0000000001",
+	"product1Code": "000000000000000001",
+	"product1Name": "sap2sfdc test product 1 - " ++ index,
+	"product2Code": "000000000000000002",
+	"product2Name": "sap2sfdc test product 2 - " ++ index,
+}]]></ee:set-variable>
+				</ee:variables>
+			</ee:transform>
+			<ee:transform doc:name="Set payload" doc:id="a1a70451-b9b0-4aaa-8bbd-ac6d093a6b72" >
+				<ee:message >
+					<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+---
+[
+  {
+	"orderId": vars.testOrder.orderId,
+	"effectiveDate": now(),
+	"status": "Completed",
+	"account": {
+		"name": vars.testOrder.accountName
+	},
+	"products": [
+      {
+		"productCode": vars.testOrder.product1Code,
+		"quantity": "1.0",
+		"price": "1.00",
+		"currency": "USD",
+		"productName": vars.testOrder.product1Name,
+		"deliveryDate": now()
+	  },
+	  {
+		"productCode": vars.testOrder.product2Code,
+		"quantity": "1.0",
+		"price": "1.00",
+		"currency": "USD",
+		"productName": vars.testOrder.product2Name,
+		"deliveryDate": now()
+	  }
+    ]
+  }
+]
+]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+            <flow-ref doc:name="Call businessLogicFlow" doc:id="587938ef-dce2-4d5d-b763-8a049c553311" name="businessLogicFlow" />
+            <scripting:execute engine="Groovy" doc:name="Sleep for 30s until the processing is completed" doc:id="8993ca70-6b0a-41c5-b244-576e455f929e">
+                <scripting:code>sleep(30000)</scripting:code>
+            </scripting:execute>
+            <salesforce:query doc:name="Query OrderItems" doc:id="6e4e68c8-9f53-4d80-a742-7301a1451b4d" config-ref="Salesforce_Config"
+                target="resultOrderItems">
+                <salesforce:salesforce-query>SELECT Id FROM OrderItem WHERE Order.SAP4HANA_Order_Key__c=':orderId'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"orderId" : vars.testOrder.orderId
+}]]]></salesforce:parameters>
+            </salesforce:query>
+			<flow-ref doc:name="Delete test order" doc:id="0b617f5d-f9ae-4b3c-88a9-f57255258c30" name="deleteTestOrderSubFlow"/>
+		</munit:execution>
+		<munit:validation >
+			<munit-tools:assert-that doc:name="Assert that OrderItems exist in Salesforce" doc:id="dda5e7b2-2761-4b06-8338-cc04afde97ba"
+                expression="#[sizeOf(vars.resultorderItems)]" is="#[MunitTools::equalTo(2)]" message="OrderItems don't exist in Salesforce" />
+		</munit:validation>
+	</munit:test>
+	<sub-flow name="deleteTestOrderSubFlow" doc:id="ef77674c-8922-4d80-a151-ee84b3e397aa" >
+        <salesforce:query-single doc:name="Query Account" doc:id="ce712a59-a868-4135-8910-bfe02ea11d34" config-ref="Salesforce_Config" target="accountId" targetValue="#[payload.Id]">
+                <salesforce:salesforce-query>SELECT Id FROM Account WHERE Name=':name'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"name" : vars.testOrder.accountName
+}]]]></salesforce:parameters>
+        </salesforce:query-single>
+        <salesforce:query doc:name="Query Products" doc:id="316c0ab8-4a8a-4902-9cf7-5ac9f3d3415c" config-ref="Salesforce_Config" target="productIds" targetValue="#[payload.Id]">
+            <salesforce:salesforce-query>SELECT Id FROM Product2 WHERE Name in (':product1', ':product2')</salesforce:salesforce-query>
+            <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"product1" : vars.testOrder.product1Name,
+	"product2" : vars.testOrder.product2Name
+}]]]></salesforce:parameters>
+        </salesforce:query>
+        <salesforce:delete doc:name="Delete Test Order" doc:id="05581641-85a9-4ede-a128-9ec768e5a7b1" config-ref="Salesforce_Config">
+            <salesforce:delete-ids><![CDATA[#[[vars.accountId] ++ vars.productIds]]]></salesforce:delete-ids>
+        </salesforce:delete>
+    </sub-flow>
+
+</mule>
