@@ -1,0 +1,104 @@
+<?xml version='1.0' encoding='utf-8'?>
+<configuration>
+	<placeholders>
+		<placeholder id="template_name">SAP S/4Hana to Salesforce Sales Order Broadcast</placeholder>
+	</placeholders>
+	<sections>
+		<section id="use_case">
+As a Salesforce administrator I want to synchronize sales orders between a SAP S/4HANA and a Salesforce organization.
+
+This template is a foundation for the process of broadcasting sales orders from a SAP S/4HANA to a Salesfoce instance. Everytime there is new order or a change in an already existing one, the integration polls for changes in the SAP S/4HANA source instance and is responsible for upserting the order into Salesforce.
+
+Requirements have been set not only to be used as examples, but also to establish a starting point to adapt your integration to your requirements.
+
+As implemented, this template leverages the batch module. The batch job is divided into *Process* and *On Complete* stages. 
+
+The integration is triggered by a scheduler defined in the flow that triggers the application, queries the newest SAP S/4HANA updates or creations that match a filter criteria and executes the batch job. During the *Process* stage, each SAP S/4HANA order is be filtered depending on if it has an existing matching Order in Salesforce. The last step of the *Process* stage groups the sales orders and creates or updates them in Salesforce. Finally during the *On Complete* stage, the template logs output statistics data on the console.
+		</section>
+		<section id="considerations">
+
+To make this template run, there are certain preconditions that must be considered. All of them deal with the preparations in both source (SAP S/4HANA) and destination (SFDC) systems, that must be made for the template to run smoothly. Failing to do so can lead to unexpected behavior of the template.
+
+Before you continue with the use of this template, you may want to check out this [Documentation Page](https://docs.mulesoft.com/connectors/sap/sap-s4hana-cloud-connector), that teaches you how to work with SAP S/4HANA and Anypoint Studio.
+
+		</section>
+		<section id="running_on_studio">
+After you import your template into Anypoint Studio, follow these steps to run it:
+
++ Locate the properties file `mule.dev.properties`, in src/main/resources.
++ Complete all the properties required as per the examples in the "Properties to Configure" section.
++ Right click the template project folder.
++ Hover your mouse over `Run as`.
++ Click `Mule Application (configure)`.
++ Inside the dialog, select Environment and set the variable `mule.env` to the value `dev`.
++ Click `Run`.
+To make this template run on Studio there are a few extra steps that needs to be made.
+Check this Documentation Page: [Enabling Your Studio Project for SAP S/4HANA](https://docs.mulesoft.com/connectors/sap/sap-s4hana-cloud-connector#configuring-the-connector-in-studio-7).
+		
+		</section>
+		<section id="s4hana_src">
+
+There are no considerations with using a SAP S/4HANA as a data origin.
+		</section>
+		<section id="sfdc_dst">
+		
+Here's what you need to know about Salesforce to get this template to work.
+		</section>
+		<section id="application_configuration">
+**Batch Aggregator Configuration**
+- page.size `200`
+
+**Scheduler Configuration**
+
+- scheduler.frequency `10000`
+- scheduler.startDelay `100`
+
+**Watermarking Default Last Query Timestamp**
+
+- watermark.default.expression `2019-08-01T00:00:00Z`
+
+**SalesForce Connector Configuration**
+
++ sfdc.username `bob.dylan@sfdc`
++ sfdc.password `DylanPassword123`
++ sfdc.securityToken `avsfwCUl7apQs56Xq2AKi3X`
++ sfdc.pricebook.id `01s0J000002IZrUQAW`
++ sfdc.pricebook.standard.id `01s20000001SwERAA0`
+
+**SAP4HANA Connector Configuration**
+
++ s4hana.baseUrl `your.sap4hana.address.com`
++ s4hana.username `your.sap4hana.username`
++ s4hana.password `your.sap4hana.password`
+
+		</section>
+		<section id="api_calls">
+		
+SalesForce imposes limits on the number of API Calls that can be made.
+Therefore calculating this amount may be an important factor to
+consider. Order Broadcast Template calls to the API can be
+calculated using the formula:
+
+**X / ${page.size}**
+
+Being X the number of Sales Orders to be synchronized on each run.
+
+The division by ${page.size} is because, by default, Orders are gathered in groups
+of ${page.size} for each Upsert API Call in the aggregation step. Also consider
+that this calls are executed repeatedly every polling cycle.
+
+For instance if 10 records are fetched from origin instance, then 1 api
+calls to SFDC will be made (1).
+		</section>
+		<section id="default_business_logic_xml">
+		<![CDATA[
+Functional aspect of the template is implemented on this XML, directed by a batch job that's responsible for creations or updates. The several message processors constitute three high level actions that fully implement the logic of this template:
+
+1. Job execution is invoked from SchedulerFlow (endpoints.xml) every time there is a new query executed asking for created or updated orders.
+2. During the *Process* stage, each SAP S/4HANA order is filtered depending on if it has an existing matching order in Salesforce.
+3. The last step of the *Process* stage groups the orders and creates or updates them in Salesforce.
+4. Finally during the *On Complete* stage, the template logs the output statistics data on the console.
+]]>
+		</section>
+	</sections>
+</configuration>

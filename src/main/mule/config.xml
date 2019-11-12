@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns:email="http://www.mulesoft.org/schema/mule/email"
+    xmlns:tls="http://www.mulesoft.org/schema/mule/tls" xmlns:s4hana="http://www.mulesoft.org/schema/mule/s4hana" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core"
+    xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/s4hana http://www.mulesoft.org/schema/mule/s4hana/current/mule-s4hana.xsd
+http://www.mulesoft.org/schema/mule/tls http://www.mulesoft.org/schema/mule/tls/current/mule-tls.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <global-property doc:name="Global Property" doc:id="47d81bf2-3f29-46c7-9e88-7e9ac7289223" name="mule.env" value="dev" />
+    <configuration-properties file="common.properties" doc:name="Configuration properties" doc:id="4262b9fa-7c67-4b9d-b560-8283eebed388" />
+    <configuration-properties file="mule.${mule.env}.properties" doc:name="Configuration properties" doc:id="71ff1eab-2844-42bf-937f-5959002880ae" />
+
+    <s4hana:config name="SAP_S_4HANA_Config" doc:name="SAP S 4HANA Config" doc:id="59d22487-6dc3-450d-be94-669021528cd7">
+        <s4hana:basic-authentication-connection username="${s4hana.username}" baseUrl="${s4hana.baseUrl}" password="${s4hana.password}" />
+    </s4hana:config>
+
+    <salesforce:sfdc-config name="Salesforce_Config" doc:name="Salesforce Config" doc:id="2b432d3e-9b7c-47a5-80db-f089eefc7c1b">
+        <salesforce:cached-basic-connection username="${sfdc.username}" password="${sfdc.password}" securityToken="${sfdc.securityToken}" />
+    </salesforce:sfdc-config>
+
+    <os:object-store name="Object_store" doc:name="Object store" doc:id="5323ac76-bed8-4630-b56f-1190077d8319" />
+    <os:object-store name="Account_store" doc:name="Object store" doc:id="94b11b80-46b2-4577-a9f5-662507da56fa" persistent="false" />
+</mule>

@@ -1,0 +1,621 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:s4hana="http://www.mulesoft.org/schema/mule/s4hana" xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+    xmlns:batch="http://www.mulesoft.org/schema/mule/batch" xmlns:sap="http://www.mulesoft.org/schema/mule/sap" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns="http://www.mulesoft.org/schema/mule/core"
+    xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/sap http://www.mulesoft.org/schema/mule/sap/current/mule-sap.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+http://www.mulesoft.org/schema/mule/s4hana http://www.mulesoft.org/schema/mule/s4hana/current/mule-s4hana.xsd">
+    <flow name="mainFlow" doc:id="ec0515ba-01e6-43ec-805a-8925ff24a842">
+        <flow-ref doc:name="Call S4HANA Query SubFlow" doc:id="c1cfd73d-c255-4459-b471-35aa112bd99b" name="querySubFlow" />
+        <flow-ref doc:name="Call Business Logic SubFlow" doc:id="e9e8faef-bc72-48f9-b730-fd234dd91030" name="businessLogicFlow" />
+        <error-handler>
+            <on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="b30402ea-7fea-478d-a7dd-98fc194acdf3">
+                <flow-ref doc:name="errorHandlingFlow" doc:id="214d0b62-c02c-4220-9824-79d3ddb37b66" name="errorHandlingFlow" />
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+    <sub-flow name="querySubFlow" doc:id="573eb48e-7f36-41bd-a067-4eab9be2d990">
+        <s4hana:query doc:name="Query SalesOrder" doc:id="5ab0c777-b00b-41c5-ba49-0d56609aee48" config-ref="SAP_S_4HANA_Config" service="API_SALES_ORDER_SRV" entityType="A_SalesOrder"
+            filter="#[&quot;LastChangeDateTime gt datetimeoffset'&quot; ++ vars.lastQueryTimestamp as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSS&quot;} ++ &quot;'&quot;]" orderBy="LastChangeDateTime asc" select="SalesOrder,OverallSDProcessStatus,RequestedDeliveryDate,PurchaseOrderByCustomer,LastChangeDateTime,to_Item" expand="to_Item" top="2"/>
+        <choice doc:name="Choice" doc:id="0d391cfb-a351-42bf-bf66-91ea1e60f158">
+            <when expression="#[not isEmpty(payload)]">
+                <ee:transform doc:name="Prepare lastQueryTimestamp" doc:id="605c7d2c-8975-4452-8c91-b3e28729a698">
+                    <ee:message>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="lastQueryTimestamp"><![CDATA[%dw 2.0
+output application/java
+---
+payload[-1].LastChangeDateTime]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+                <os:store doc:name="Store lastQueryTimestamp" doc:id="ad851fc5-643b-4da1-a141-9b7a93816f14" key="watermark" failOnNullValue="false" objectStore="Object_store">
+                    <os:value><![CDATA[#[vars.lastQueryTimestamp]]]></os:value>
+                </os:store>
+                <logger level="INFO" doc:name="Log s4hana sales orders" doc:id="a6c03eb9-4cbb-4a94-b5c0-6df2061a026d" message="s4hana response data=#[output application/json --- payload]" />
+                <ee:transform doc:name="Prepare S4Hana Response" doc:id="bc83d8d1-30bb-4876-8245-41e2bf9623c8">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+var data = payload filter (not isEmpty($.to_Item))
+var filteredData = data filter ($.OverallSDProcessStatus == p("s4hana.order.status")) distinctBy ($.SalesOrder)
+fun toS4Hana(orders) = orders map ((order) -> {
+	effectiveDate: order.RequestedDeliveryDate,
+    orderId: order.SalesOrder,
+    status:  if(order.OverallSDProcessStatus == 'C') "Completed" else "Draft",
+    account: {
+        name: if(isEmpty(order.PurchaseOrderByCustomer)) "TestAccount" else order.PurchaseOrderByCustomer
+    },
+    products: order.to_Item map ((orderItem) -> {
+	    productCode: orderItem.Material,
+	    quantity: orderItem.RequestedQuantity,
+	    price: orderItem.NetAmount,
+	    currency: orderItem.TransactionCurrency,
+	    productName: orderItem.SalesOrderItemText,
+	    deliveryDate: order.RequestedDeliveryDate
+})
+})
+---
+if(not isEmpty(p("s4hana.order.status"))) toS4Hana(filteredData)
+else toS4Hana(data)]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables />
+                </ee:transform>
+            </when>
+        </choice>
+		<logger level="INFO" doc:name="Log S4Hana Data" doc:id="a3f08c1c-1e4b-4d7a-aad2-b568492ba8a8" message="s4hana data=#[output application/json --- payload]" />
+    </sub-flow>
+    <flow name="businessLogicFlow" doc:id="f6756dcd-1495-4875-9124-6c4ac9aa93d1">
+        <batch:job jobName="businessLogicBatchJob" doc:id="79af97f6-96d3-4d4a-9476-e1f51d393372" blockSize="${page.size}">
+            <batch:process-records>
+                <batch:step name="CheckStep" doc:id="89955b36-158f-41e2-a2e1-3d501cd1413a">
+                    <flow-ref doc:name="CheckStepSubFlow" doc:id="0338dc54-ac1a-4274-a9c6-a9cc6676d96a" name="CheckStepSubFlow" />
+                </batch:step>
+                <batch:step name="AccountCreationStep" doc:id="da4091ff-12ce-4b4a-a0e6-8661c53c8b08">
+                    <batch:aggregator doc:name="Batch Aggregator" doc:id="0d33c557-bfce-466a-94a6-fc498e2be9bc" size="${aggregator.size}">
+                        <flow-ref doc:name="Call AccountCreationAggregationSubFlow" doc:id="d8267720-0d80-49ec-bec5-2922b40f32a1" name="AccountCreationAggregationSubFlow" />
+                    </batch:aggregator>
+                    <flow-ref doc:name="Call AccountCreationSubFlow" doc:id="0a46f826-340b-4ad9-86a5-3ce1bb6e4ac3" name="AccountCreationSubFlow" />
+                </batch:step>
+                <batch:step name="ReloadNewAccountsStep" doc:id="d86dd343-fb82-45cb-9e67-f43134b64616">
+                    <flow-ref doc:name="Call AccountCreationAggregationSubFlow" doc:id="bcf27307-8a09-4e75-9c5b-f2b4036f4b28" name="RealoadNewAccountsSub_Flow" />
+                </batch:step>
+                <batch:step name="ContractStep" doc:id="45224c00-e4ca-45ea-9e03-4419136a208c" acceptExpression="vars.sfdcContract == null">
+                    <flow-ref doc:name="Call ContractStepSub_Flow" doc:id="0e23cff0-5989-43b1-8880-38dce654b4ee" name="ContractStepSub_Flow" />
+                </batch:step>
+                <batch:step name="ProductStep" doc:id="4fa3e793-0e84-45b6-ab75-674bfde48f06">
+                    <flow-ref doc:name="Call ProductStepSub_Flow" doc:id="5df39a45-932c-4f84-b870-6d0824ae5c7c" name="ProductStepSub_Flow" />
+                </batch:step>
+                <batch:step name="RemoveOrderItemsStep" doc:id="b41e69d9-691b-4d4b-9668-a6a0d1b7fbc8" acceptExpression="vars.sfdcOrder != null">
+                    <flow-ref doc:name="RemoveOrderItemsSub_Flow" doc:id="976ca58c-e6f2-4c3f-8d22-82b7f9143480" name="RemoveOrderItemsSub_Flow" />
+                </batch:step>
+                <batch:step name="OrderStep" doc:id="8f64570e-2bfa-4a08-a085-f63ed49bc050">
+                    <flow-ref doc:name="OrderSub_Flow" doc:id="66bf8acf-6232-418c-bb8d-800be25d8de6" name="OrderSub_Flow" />
+                    <batch:aggregator doc:name="Batch Aggregator" doc:id="5c535fd9-fa0e-4e3a-a338-0593d46a955e" size="${aggregator.size}">
+                        <flow-ref doc:name="Call OrderAggregationSubFlow" doc:id="93880d80-5ce1-4b55-a559-48f79cf29dc5" name="OrderAggregationSubFlow" />
+                    </batch:aggregator>
+                </batch:step>
+            </batch:process-records>
+            <batch:on-complete>
+                <logger level="INFO" doc:name="Migration process has finished!" doc:id="f7615364-9f43-48fd-8915-7cd9bb3d4ce9" message="Migration process has finished!" />
+				<flow-ref doc:name="Call cleanu up SubFlow" doc:id="484342cd-ebdb-4064-b638-82ab340765be" name="cleanUpSubFlow" />
+            </batch:on-complete>
+        </batch:job>
+    </flow>
+    <sub-flow name="cleanUpSubFlow" doc:id="8a5c8ca4-31b2-49a2-aade-2e550323c9c8">
+        <logger level="INFO" doc:name="Log account store clean up" doc:id="1d2dec77-d749-45b6-83b9-5230357bcaee" message="cleaning account store" />
+        <os:clear doc:name="Clear account in store" doc:id="4601eeb2-a047-402c-92b0-a7dc2bd8ad5c" objectStore="Account_store" />
+    </sub-flow>
+    <sub-flow name="CheckStepSubFlow" doc:id="fd07de52-094f-47a0-90a3-69c2114eb8b8">
+        <logger level="INFO" doc:name="Log input record" doc:id="b8769b19-283e-4c63-aeb9-7bbd5c33a2ed" message="Read record=#[output application/json --- payload]" />
+        <ee:transform doc:name="Store input data" doc:id="6a436c8c-3674-4924-8085-1396c4be81ca">
+            <ee:message>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="inputS4HANAOrder"><![CDATA[%dw 2.0
+output application/java
+---
+payload]]></ee:set-variable>
+                <ee:set-variable variableName="inputS4HANAProducts"><![CDATA[payload.products]]></ee:set-variable>
+                <ee:set-variable variableName="inputS4HANAProductCodes"><![CDATA[payload.products.productCode]]></ee:set-variable>
+                <ee:set-variable variableName="sfdcPricebookId"><![CDATA[%dw 2.0
+output application/java
+---
+p('sfdc.pricebook.id')]]></ee:set-variable>
+                <ee:set-variable variableName="sfdcProducts"><![CDATA[%dw 2.0
+output application/java
+---
+[]]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <set-payload value="#[vars.inputS4HANAOrder.account.name]" doc:name="Set Payload" doc:id="924d96e4-1568-4596-ab55-760dcce4cb45" />
+        <flow-ref doc:name="Search for account" doc:id="3513397c-6fe2-4f93-a7bb-062e5f85ca2d" name="AccountSearchSub_Flow" targetValue="#[payload]" />
+        <logger level="INFO" doc:name="Log account" doc:id="635a6bae-98a3-4b28-b6cb-95d01a4be805" message="SFDC Account for S4HANA order=#[output application/json --- vars.sfdcAccount]" />
+        <salesforce:query doc:name="Query Order" doc:id="d10e8b03-4f4c-4c8b-9229-9ec17a6e5e8f" config-ref="Salesforce_Config" target="sfdcOrder"
+            targetValue="#[if (isEmpty(payload)) null else payload[0]]">
+            <salesforce:salesforce-query>Select Id, Name, OrderNumber, AccountId, ContractId, EffectiveDate, Status, SAP4HANA_Order_Key__c from Order where
+                SAP4HANA_Order_Key__c=':id'
+            </salesforce:salesforce-query>
+            <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"id" : vars.inputS4HANAOrder.orderId
+}]]]></salesforce:parameters>
+        </salesforce:query>
+        <logger level="INFO" doc:name="Log order" doc:id="854d032b-45c0-49a8-a8b9-d8262d922ce0" message="sfdc order=#[output application/json --- vars.sfdcOrder]" />
+        <choice doc:name="Does SFDC account exist?" doc:id="5524de19-9bff-4cc4-a2f9-cb72d639000c">
+            <when expression="#[vars.sfdcAccount.Id != null]">
+                <salesforce:query doc:name="Query Contract" doc:id="d8a4ddfd-9e40-440d-b6b0-3cbea05eddce" config-ref="Salesforce_Config" target="sfdcContract"
+                    targetValue="#[if (isEmpty(payload)) null else payload[0]]">
+                    <salesforce:salesforce-query>Select Id, ContractNumber, StartDate, Status, ContractTerm, AccountId, Pricebook2Id from Contract where AccountId=':id'
+                    </salesforce:salesforce-query>
+                    <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"id" : vars.sfdcAccount.Id
+}]]]></salesforce:parameters>
+                </salesforce:query>
+                <logger level="INFO" doc:name="Log contract" doc:id="fd8ebdde-8568-4238-96a2-056d7e865fbb" message="contract=#[output application/json --- vars.sfdcContract]" />
+                <ee:transform doc:name="Update PricebookId" doc:id="75e01298-f8d2-44be-a478-945b623ded07">
+                    <ee:message>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="sfdcPricebookId"><![CDATA[%dw 2.0
+output application/java
+---
+if (vars.sfdcContract != null) vars.sfdcContract.Pricebook2Id else vars.sfdcPricebookId]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+        </choice>
+    </sub-flow>
+    <sub-flow name="AccountSearchSub_Flow" doc:id="954ed256-0132-4901-81d1-648a0d7b56b3">
+        <logger level="INFO" doc:name="Log account name" doc:id="332f20cc-a461-46df-a2c2-5417023d309c" message="Account to search, name=#[payload]" />
+        <set-variable value="#[vars.inputS4HANAOrder.account.name]" doc:name="accountName" doc:id="fd0cbc86-040c-4765-aa65-0ba2b0f30073" variableName="accountName" />
+        <os:contains doc:name="Look for account name" doc:id="59d62475-ac3d-42fb-8a7d-f591e35d54fa" key="#[vars.accountName]" objectStore="Account_store" />
+        <choice doc:name="Is account in store?" doc:id="58625dea-f8da-4277-8d04-3b22547c2027">
+            <when expression="#[payload == false]">
+                <logger level="INFO" doc:name="Log choise " doc:id="687b23ed-2fe9-465d-9787-e6235dae6721" message="No account in store, trying SFDC, name=#[vars.accountName]" />
+                <salesforce:query doc:name="Query Account" doc:id="5dc8d8a2-dbb4-49d8-bbd1-d58324c045b3" config-ref="Salesforce_Config">
+                    <salesforce:salesforce-query>Select Id, Name from Account where Name=':name'</salesforce:salesforce-query>
+                    <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"name" : vars.accountName
+}]]]></salesforce:parameters>
+                </salesforce:query>
+                <ee:transform doc:name="Transform Message" doc:id="89a2d4b7-81bb-458e-99b7-1723a9aea3ee">
+                    <ee:message>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="sfdcAccount"><![CDATA[%dw 2.0
+output application/java
+---
+if(isEmpty(payload)) null else payload[0]]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+                <logger level="INFO" doc:name="Log sfdc account" doc:id="d7bbedce-f08e-4750-9df5-f1c9367e726a" message="queried sfdc account=#[output application/json --- vars.sfdcAccount]" />
+                <choice doc:name="Is account in SFDC?" doc:id="64fb22a2-f57c-492d-b5db-5c1bf2fe2818">
+                    <when expression="#[vars.sfdcAccount == null]">
+                        <logger level="INFO" doc:name="Log choice" doc:id="cd37bdc0-75e8-477b-9f35-af798cb25f0b" message="No account in SFDC, storing name for further creation, vars.sfdcAccount=#[vars.sfdcAccount]" />
+                        <ee:transform doc:name="Store accountName for creation and payload null" doc:id="df761b9a-01ba-4062-a0e1-3124a99c5298">
+                            <ee:message>
+                            </ee:message>
+                            <ee:variables>
+                                <ee:set-variable variableName="sfdcAccount"><![CDATA[%dw 2.0
+output application/java
+---
+{
+	"Name": vars.accountName
+}]]></ee:set-variable>
+                            </ee:variables>
+                        </ee:transform>
+                    </when>
+                    <otherwise>
+                        <logger level="INFO" doc:name="Log account to store" doc:id="52b210c6-2533-440a-bcf0-ed6076b37adb"
+                            message="Account is in SFDC, storing to store, vars.sfdcAccount=#[output application/json --- vars.sfdcAccount]" />
+                        <os:store doc:name="Store SFDC account" doc:id="46f2370b-af3e-404e-bb0c-423d865fdb8f" key="#[vars.sfdcAccount.Name]" objectStore="Account_store">
+                            <os:value><![CDATA[#[vars.sfdcAccount]]]></os:value>
+                        </os:store>
+                    </otherwise>
+                </choice>
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Log choice " doc:id="581b8d11-7956-4514-8bfe-1b82b76eeb2e" message="Account is in store, retrieving, name=#[vars.accountName]" />
+                <os:retrieve doc:name="Retrieve account" doc:id="1cd9f14f-d81e-4054-bcc0-d81f765966e9" key="#[vars.accountName]" objectStore="Account_store" target="sfdcAccount" />
+            </otherwise>
+        </choice>
+        <logger level="INFO" doc:name="Log retVal" doc:id="8cfa6e76-3e12-4f62-90c0-1e31c84fe963"
+            message="account in store choice finished, retrieved account vars.sfdcAccount=#[output application/json --- vars.sfdcAccount]" />
+        <set-payload value="#[vars.sfdcAccount]" doc:name="Set Payload" doc:id="eefcaf94-44db-4b90-9947-093c92f2245e" />
+        <remove-variable doc:name="accountName" doc:id="dfea837e-8d1e-43bc-b786-21ab118d24fa" variableName="accountName" />
+    </sub-flow>
+    <sub-flow name="AccountCreationSubFlow" doc:id="df06cb42-df2c-4d96-87cb-37810010aaf9">
+        <choice doc:name="Will be account created?" doc:id="650fd1d2-7bb4-4f43-b860-ae35ce459f25">
+            <when expression="#[vars.sfdcAccount.Id == null]">
+                <set-payload value="#[vars.sfdcAccount]" doc:name="Set account" doc:id="68bc62f8-e63a-4c3b-a617-820d199a8af8" />
+            </when>
+            <otherwise>
+                <set-payload value="#[null]" doc:name="set null" doc:id="5036da14-368d-4aa8-ac9f-ba3d90926927" />
+            </otherwise>
+        </choice>
+    </sub-flow>
+    <sub-flow name="AccountCreationAggregationSubFlow" doc:id="4cde8683-2e48-44ee-903a-3d9e3b811355">
+        <ee:transform doc:name="Filter accounts to create" doc:id="77ca0313-4094-4525-a34e-151efe269df5">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+payload filter ($ != null) distinctBy ($.Name)
+]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+        <logger level="INFO" doc:name="Log accounts to create" doc:id="98a69065-84e5-4ce3-a9cb-229f34dbfbda" message="Filtered list of account names to create=#[output application/json --- payload]" />
+        <choice doc:name="Choice" doc:id="e8f0c024-768c-43fd-9c5f-7aecaac4f1bd">
+            <when expression="#[not isEmpty(payload)]">
+                <salesforce:create doc:name="Create account" doc:id="69c5fc2c-c6f2-4ff5-a10d-02e5b306ed10" config-ref="Salesforce_Config" type="Account"
+                    target="createAccountResponse" />
+                <logger level="INFO" doc:name="Log call response" doc:id="8bc06e08-75b9-480c-a705-4390bc17968c" message="createAccountResponse=#[output application/json --- vars.createAccountResponse]" />
+                <ee:transform doc:name="Prepare accounts data" doc:id="853d520b-d102-4f5e-ace8-61d95c0beb4f">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+vars.createAccountResponse map(item, index) -> {
+    "Id": item.id,
+    "Name": payload[index].Name
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+                <logger level="INFO" doc:name="Log accounts data" doc:id="1a29bd9a-47be-4cd5-9796-1c093ddd77e0" message="created accounts=#[output application/json --- payload]" />
+                <foreach doc:name="For Each new account" doc:id="4023f9b0-8a30-44a8-a068-f03ac0d75bb2" collection="payload">
+                    <logger level="INFO" doc:name="Log account name" doc:id="49be043c-5d4f-4d21-b918-a27ae9f1c2c9" message="storing created account to store, key=#[payload.Name]" />
+                    <os:store doc:name="Store new account" doc:id="fe0bbef5-2bb3-4e11-b3e4-927535d66baa" key="#[payload.Name]" objectStore="Account_store" />
+                </foreach>
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Logger" doc:id="47869285-4ccc-4a78-9a0a-58c080cecb9d" message="No need to create accounts" />
+            </otherwise>
+        </choice>
+    </sub-flow>
+    <sub-flow name="RealoadNewAccountsSub_Flow" doc:id="c61ea23e-b661-4992-8c8f-089aaf6de256">
+        <logger level="INFO" doc:name="Logger" doc:id="1b8cfa4f-29e3-440c-ac6e-7f8b65fb51ea" message="reload account, payload=#[output application/json --- payload]" />
+        <logger level="INFO" doc:name="Logger" doc:id="59b971fa-bbb6-4bc3-a20e-42f8bdab06be" message="is account loaded? vars.sfdcAccount=#[output application/json --- vars.sfdcAccount]" />
+        <choice doc:name="Choice" doc:id="85c818ee-ebc6-439d-8bd9-16ffe2c37fab">
+            <when expression="#[vars.sfdcAccount.Id == null]">
+                <logger level="INFO" doc:name="Logger" doc:id="c3d0c81e-ea4d-4cb0-ac8c-403c532657b6" message="retrieving new account from store, key=#[vars.sfdcAccount.Name]" />
+                <os:retrieve doc:name="Retrieve account" doc:id="3a7c1eda-2336-4d5b-83de-1311d6b42564" key="#[vars.sfdcAccount.Name]" target="sfdcAccount" objectStore="Account_store" />
+            </when>
+        </choice>
+        <logger level="INFO" doc:name="Log account" doc:id="2eb20058-8c2d-4c0f-a315-ddbc662f29a8" message="reloaded sfdc account=#[output application/json --- vars.sfdcAccount]" />
+    </sub-flow>
+    <sub-flow name="ContractStepSub_Flow" doc:id="7145145a-34c4-4be6-b3e6-df7dd1bd28c9">
+        <logger level="INFO" doc:name="Log step start" doc:id="e8d2c431-5a3c-487b-9b63-18bcd1766c6b" message="Processing contract, accountId=#[vars.sfdcAccount.Id]" />
+        <salesforce:create type="Contract" doc:name="Create Contract" doc:id="99dca022-50a0-48a8-8dd6-d1677c252db0" config-ref="Salesforce_Config" target="createContractResponse">
+            <salesforce:records><![CDATA[#[[{
+	"ContractTerm": 1000,
+	"AccountId": vars.sfdcAccount.Id,
+	"Pricebook2Id": vars.sfdcPricebookId
+}]]]]></salesforce:records>
+        </salesforce:create>
+        <logger level="INFO" doc:name="Log call response" doc:id="45e2d8cc-e332-48ec-8956-8c44a53aeb5b" message="create contract response=#[output application/json --- vars.createContractResponse]" />
+        <ee:transform doc:name="Prepare contract data" doc:id="fa61f02f-b6f9-4097-8447-4d9f330e63e4">
+            <ee:message />
+            <ee:variables>
+                <ee:set-variable variableName="sfdcContract"><![CDATA[%dw 2.0
+output application/java
+---
+{
+	"AccountId" : vars.sfdcAccount.Id,
+	"Id": vars.createContractResponse[0].id,
+	"Pricebook2Id": vars.sfdcPricebookId
+}
+]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+    </sub-flow>
+    <sub-flow name="ProductStepSub_Flow" doc:id="db721701-8955-47d6-a1e4-b1a5911a2166">
+        <logger level="INFO" doc:name="Log step start" doc:id="1d7f6fd2-8a30-4849-92dd-586618747fde" message="Product step, products=#[output application/json --- vars.inputS4HANAProducts]" />
+        <foreach doc:name="For Each S4HANA Product" doc:id="d85dc414-cd5f-4981-90ef-c6b2dd2f5bbf" collection="vars.inputS4HANAProducts">
+            <ee:transform doc:name="Prepare productCode2ProductIdList" doc:id="b46a541a-97bc-46a4-8b92-3a7be0b9a274">
+                <ee:message>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="productCode2ProductIdList"><![CDATA[%dw 2.0
+output application/java
+---
+[]]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            <logger level="INFO" doc:name="Log S4HANA product" doc:id="475f72b5-9ea9-49f7-91d1-14d673939157" message="product=#[output application/json --- payload]" />
+            <salesforce:query doc:name="Query SFDC Product" doc:id="f7dba89c-3837-41f3-a538-f708bb78c6c7" config-ref="Salesforce_Config" target="sfdcProduct"
+                targetValue="#[if (isEmpty(payload)) null else payload[0]]">
+                <salesforce:salesforce-query>SELECT Id, Name, ProductCode from Product2 where ProductCode=':code' AND Name=':name'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"code" : payload.productCode,
+	"name" : payload.productName
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            <logger level="INFO" doc:name="Log SFDC product" doc:id="5ec4ed12-6e68-42ad-b315-4d81c7777a35" message="sfdc product=#[output application/json --- vars.sfdcProduct]" />
+            <choice doc:name="Does SFDC product exist?" doc:id="0171159a-b8cf-4eda-96e9-df4b7210ddb1">
+                <when expression="#[vars.sfdcProduct == null]">
+                    <ee:transform doc:name="Prepare product data" doc:id="dae205ef-d074-4ab5-95de-0c156dd9ea80">
+                        <ee:message>
+                        </ee:message>
+                        <ee:variables>
+                            <ee:set-variable variableName="productData"><![CDATA[%dw 2.0
+output application/java
+---
+[
+	{
+	    "Name": payload.productName,
+	    "ProductCode": payload.productCode
+	}
+]]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                    <salesforce:create type="Product2" doc:name="Create SFDC Product" doc:id="0408cfc1-e931-40db-94c5-134daf4e3871" config-ref="Salesforce_Config"
+                        target="createProductResponse">
+                        <salesforce:records><![CDATA[#[vars.productData]]]></salesforce:records>
+                    </salesforce:create>
+                    <logger level="INFO" doc:name="Log call response" doc:id="9a31c1aa-e99a-4a74-a0de-34ad0741128b" message="createProductResponse=#[output application/json --- vars.createProductResponse]" />
+                    <ee:transform doc:name="Store sfdcProduct" doc:id="8437d38c-197a-4499-8f6e-7645f98835e8">
+                        <ee:message>
+                        </ee:message>
+                        <ee:variables>
+                            <ee:set-variable variableName="sfdcProduct"><![CDATA[%dw 2.0
+output application/java
+---
+  {
+    "ProductCode": payload.productCode,
+    "Name": payload.productName,
+    "Id": vars.createProductResponse[0].Id
+  }]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                    <ee:transform doc:name="Populate Product code to id list" doc:id="763cf399-dccd-49a9-b1f6-b7049721c0af">
+                        <ee:message>
+                        </ee:message>
+                        <ee:variables>
+                            <ee:set-variable variableName="productCode2ProductIdList"><![CDATA[%dw 2.0
+output application/java
+---
+vars.productCode2ProductIdList + {
+	"ProductCode" : payload.productCode,
+	"Product2Id": vars.createProductResponse[0].Id
+}]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                </when>
+                <otherwise>
+                    <ee:transform doc:name="Populate Product code to id list" doc:id="a9710c50-b4ce-4582-a555-e5e061b8af8f">
+                        <ee:message>
+                        </ee:message>
+                        <ee:variables>
+                            <ee:set-variable variableName="productCode2ProductIdList"><![CDATA[%dw 2.0
+output application/java
+---
+vars.productCode2ProductIdList + {
+	"ProductCode" : payload.productCode,
+	"Product2Id": vars.sfdcProduct.Id
+}]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                </otherwise>
+            </choice>
+            <logger level="INFO" doc:name="Log Pricebook id" doc:id="d67c5359-91fe-4a9c-8808-b5408474ea67" message="looking for pricebookentry, productId=#[vars.sfdcProduct.Id], pricebookId=#[p('sfdc.pricebook.id')]" />
+            <salesforce:query doc:name="Query Pricebookentry" doc:id="55f9801c-8cee-4bd2-b8f7-feb140500a0f" config-ref="Salesforce_Config" target="sfdcPricebookentryResponse">
+                <salesforce:salesforce-query>Select Id, Pricebook2Id from
+                    Pricebookentry where Product2Id=':productId'</salesforce:salesforce-query>
+                <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"productId" : vars.sfdcProduct.Id
+}]]]></salesforce:parameters>
+            </salesforce:query>
+            <logger level="INFO" doc:name="Log call response" doc:id="14a53fdd-67dc-4a1c-b8f2-372049f743ad" message="vars.sfdcPricebookentryResponse=#[output application/json --- vars.sfdcPricebookentryResponse]" />
+            <ee:transform doc:name="Get pricebook entries" doc:id="1aefc942-a197-4367-a32b-6e74c5ed081a">
+                <ee:message>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="standardPricebookEntry"><![CDATA[%dw 2.0
+output application/java
+---
+vars.sfdcPricebookentryResponse filter ($.Pricebook2Id == p('sfdc.pricebook.standard.id'))]]></ee:set-variable>
+                    <ee:set-variable variableName="pricebookEntry"><![CDATA[%dw 2.0
+output application/java
+---
+vars.sfdcPricebookentryResponse filter ($.Pricebook2Id == vars.sfdcContract.Pricebook2Id)]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            <logger level="INFO" doc:name="Log Pricebookentry" doc:id="d7c8e27a-18ca-4924-9e63-40fa411d76a0" message="pricebookEntry=#[output application/json --- vars.pricebookEntry]" />
+            <logger level="INFO" doc:name="Log StandardPricebookEntry" doc:id="b6358eb6-6fe5-47ba-a7b5-22342aee168e" message="standard pricebookEntry=#[output application/json --- vars.standardPricebookEntry]" />
+            <choice doc:name="Does Pricebookentry exist?" doc:id="c8c0f8b6-18ee-4ae2-b16d-45ff32bf5de0">
+                <when expression="isEmpty(vars.pricebookentry) or isEmpty(vars.standardPricebookEntry)">
+                    <ee:transform doc:name="Prepare Pricebookentry data" doc:id="8e0f5173-de0f-4a2e-92de-16dd2ed2f7a1">
+                        <ee:message>
+                        </ee:message>
+                        <ee:variables>
+                            <ee:set-variable variableName="sfdcPricebookentry"><![CDATA[%dw 2.0
+output application/java
+---
+[
+    ({
+        "Product2Id": vars.sfdcProduct.Id,
+        "Pricebook2Id" : p('sfdc.pricebook.standard.id'),
+        "UnitPrice" : "1",
+        "IsActive" : true
+     }) if(isEmpty(vars.standardPricebookEntry)),	
+    ({
+        "Product2Id": vars.sfdcProduct.Id,
+        "Pricebook2Id" : vars.sfdcContract.Pricebook2Id,
+        "UnitPrice" : "1",
+        "UseStandardPrice" : false,
+        "IsActive" : true
+    }) if(isEmpty(vars.pricebookEntry))
+]]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                    <logger level="INFO" doc:name="Log Pricebookentry data" doc:id="aff329bc-e26d-4023-aa7c-e6a08a77c44b" message="create Pricebookentry=#[output application/json --- vars.sfdcPricebookentry]" />
+
+                    <salesforce:create doc:name="Create Pricebookentry" doc:id="8e19ea8c-8579-4b83-8072-51cb8bd3219a" config-ref="Salesforce_Config" type="Pricebookentry"
+                        target="insertPricebookentryResponse">
+                        <salesforce:records><![CDATA[#[vars.sfdcPricebookentry]]]></salesforce:records>
+                    </salesforce:create>
+                    <logger level="INFO" doc:name="Log call response" doc:id="8d7ad07e-eb2d-43f5-b749-1c4e2be67d8e" message="vars.insertPricebookentry=#[output application/json --- vars.insertPricebookentryResponse]" />
+                    <ee:transform doc:name="Add Pricebookentry id to product" doc:id="5c534df9-7258-4b3a-9359-9fa804c3d612">
+                        <ee:message>
+                        </ee:message>
+                        <ee:variables>
+                            <ee:set-variable variableName="sfdcProduct"><![CDATA[%dw 2.0
+output application/java
+var normalIndex=if(isEmpty(vars.standardPricebookEntry)) 1 else 0
+---
+vars.sfdcProduct ++ {
+	"PricebookentryId" : if(not isEmpty(vars.pricebookentry)) vars.pricebookEntry[0].Id else (vars.insertPricebookentryResponse[normalIndex].id)
+}]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                </when>
+                <otherwise>
+                    <ee:transform doc:name="Add Pricebookentry id to product" doc:id="0c400390-4bd1-4688-92d6-fd5e1f20fc87">
+                        <ee:message>
+                        </ee:message>
+                        <ee:variables>
+                            <ee:set-variable variableName="sfdcProduct"><![CDATA[%dw 2.0
+output application/java
+---
+vars.sfdcProduct ++ {
+	"PricebookentryId" : vars.pricebookEntry[0].Id
+}]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                </otherwise>
+            </choice>
+            <logger level="INFO" doc:name="Log SFDC Product" doc:id="7623bdd4-55ad-46fd-b117-641153c73875" message="vars.sfdcProduct with pricebookentry=#[output application/json --- vars.sfdcProduct]" />
+            <ee:transform doc:name="Store sfdcProduct" doc:id="3609c77d-812a-4d6c-9cd4-cf11bfee8923">
+                <ee:message>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="sfdcProducts"><![CDATA[%dw 2.0
+output application/java
+---
+vars.sfdcProducts + vars.sfdcProduct]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </foreach>
+        <logger level="INFO" doc:name="Log productCode2ProductIdList" doc:id="e72a994f-bcda-4250-a92e-5a58a0219b59" message="ProductCode2PRoductIdList=#[output application/json --- vars.productCode2ProductIdList]" />
+        <logger level="INFO" doc:name="Log all products" doc:id="a6e4882f-7997-40fe-bec4-c2698d8b09a1" message="sfdcProducts=#[output application/json --- vars.sfdcProducts]" />
+
+    </sub-flow>
+    <sub-flow name="RemoveOrderItemsSub_Flow" doc:id="32bcc785-bc5c-4881-ac81-450d530d7456">
+        <logger level="INFO" doc:name="Log step start" doc:id="a89aea04-5f0f-457d-a8b9-cad538b11cd3" message="Orphan_products_Step, s4hana codes=#[vars.sfdcOrder.Id]" />
+        <salesforce:query doc:name="Query OrderItems" doc:id="e4be5eea-c298-447c-84e4-7e3adb5c15fc" config-ref="Salesforce_Config" target="sfdcOrderItems">
+            <salesforce:salesforce-query>SELECT Id, Quantity, Product2Id, Product2.ProductCode, Product2.Name, PricebookentryId from OrderItem where OrderId=':orderId'
+            </salesforce:salesforce-query>
+            <salesforce:parameters><![CDATA[#[output application/java
+---
+{
+	"orderId" : vars.sfdcOrder.Id
+}]]]></salesforce:parameters>
+        </salesforce:query>
+        <logger level="INFO" doc:name="Log call response" doc:id="0791dc78-a94a-4929-915d-a2d83ddde217" message="sfdcOrderItems=#[output application/json --- vars.sfdcOrderItems]" />
+        <choice doc:name="Do order items already exist?" doc:id="c8561a0c-e2cf-428a-8132-1c3fb4ff271e">
+            <when expression="#[not isEmpty(vars.sfdcOrderItems)]">
+                <salesforce:delete doc:name="Delete OrderItem" doc:id="d86097ac-9f7f-4c8a-8585-d3f26221ecb0" config-ref="Salesforce_Config" target="removeItemResponse">
+                    <salesforce:delete-ids><![CDATA[#[vars.sfdcOrderItems.Id]]]></salesforce:delete-ids>
+                </salesforce:delete>
+                <logger level="INFO" doc:name="Logger" doc:id="6c0e8f39-da8c-454a-8d3b-b6169c127a4b" message="removeItemResponse=#[output application/json --- vars.removeItemResponse]" />
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Log no deleting" doc:id="10c3587d-f1f8-42c7-b79f-201617274ce4" message="Deleting of order items is not required" />
+            </otherwise>
+        </choice>
+    </sub-flow>
+    <sub-flow name="OrderSub_Flow" doc:id="30c82335-3405-459c-8e4d-c430d3e475d4">
+        <logger level="INFO" doc:name="Log processing order" doc:id="279a048f-2e3a-4f0f-9da8-5f2ca8cdd059" message="Processing sfdcOrder=#[output application/json --- vars.sfdcOrder]" />
+        <logger level="INFO" doc:name="Log account" doc:id="025e708f-690d-4e75-8aae-c3c2bf1cf6b6" message="sfdcAccount=#[output application/json --- vars.sfdcAccount]" />
+        <logger level="INFO" doc:name="Log contract" doc:id="ebaf966b-a597-4a75-950f-883f794cd7a0" message="sfdcContract=#[output application/json --- vars.sfdcContract]" />
+        <ee:transform doc:name="Prepare order data" doc:id="0311d025-df82-4b03-8d3f-2ff47b9215b3">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+[  
+	{
+    "Status": vars.inputS4HANAOrder.status,
+	"SAP4HANA_Order_Key__c": vars.inputS4HANAOrder.orderId,
+    "AccountId": vars.sfdcAccount.Id,
+    ("Id": vars.sfdcOrder.Id) if(vars.sfdcOrder != null),
+    "EffectiveDate": vars.inputS4HANAOrder.effectiveDate,
+    "ContractId": vars.sfdcContract.Id
+    
+  }
+]]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+        <logger level="INFO" doc:name="Log order data" doc:id="3ec96ed1-3352-43bc-8eb2-4ad31da2590f" message="data for order upsert=#[output application/json --- payload]" />
+        <salesforce:upsert type="Order" doc:name="Upsert Order" doc:id="dde44fa9-84f3-4061-8fc7-63855455aea0" config-ref="Salesforce_Config" externalIdFieldName="Id"
+            target="upsertOrderResponse" />
+        <logger level="INFO" doc:name="Log call response" doc:id="87958c8f-cb81-4c35-bde6-a9629d8a634f" message="upsertOrderResponse=#[output application/json --- vars.upsertOrderResponse]" />
+        <ee:transform doc:name="Store Id of upserted Order" doc:id="466db5c3-36ab-4953-ad2d-8df0257920c8">
+            <ee:message>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="sfdcOrder"><![CDATA[%dw 2.0
+output application/java
+---
+if (vars.sfdcOrder != null)
+vars.sfdcOrder ++ {
+	"Id": vars.upsertOrderResponse[0].id
+}
+else
+{
+	"Id": vars.upsertOrderResponse[0].id
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="INFO" doc:name="Log upserted order" doc:id="4287e871-54d1-44f6-b175-45d7117db695" message="populated vars.sfdcOrder=#[output application/json --- vars.sfdcOrder]" />
+        <foreach doc:name="For Each Product" doc:id="a750824e-01fc-43c3-a383-4ef0516f03d0" collection="vars.inputS4HANAProducts">
+            <ee:transform doc:name="Prepare OrderItem data" doc:id="9fa136b6-2fb7-4a1f-b98c-e69aa6899a79">
+                <ee:message>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="upsertOrderItemData"><![CDATA[%dw 2.0
+output application/java
+fun getProduct2Id(productCode) = vars.productCode2ProductIdList filter ($.ProductCode == productCode)
+fun getSfdcProduct(productCode) = vars.sfdcProducts filter ($.ProductCode == productCode)
+---
+(vars.upsertOrderItemData default []) + {
+	"Quantity": payload.quantity,
+	"Product2Id": getProduct2Id(payload.productCode)[0].Product2Id,
+	"OrderId": vars.sfdcOrder.Id,
+    "Description": payload.productName,
+	"UnitPrice": payload.price,
+	"ServiceDate": payload.deliveryDate,
+	"PricebookEntryId": getSfdcProduct(payload.productCode)[0].PricebookentryId,
+}
+]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </foreach>
+        <set-payload value="#[vars.upsertOrderItemData]" doc:name="Set Payload" doc:id="3f3a5a84-33a8-4246-919f-6b3d8ea83f26" />
+
+    </sub-flow>
+    <sub-flow name="OrderAggregationSubFlow" doc:id="5162c92a-b6d2-4daf-beeb-dea84af0a254">
+        <logger level="INFO" doc:name="Log orderitems data" doc:id="03fa1dc2-c467-48dd-ba9c-8f7cb8441a2b" message="order aggregator vars.upsertOrderItemData=#[output application/json --- flatten(payload)]" />
+        <salesforce:create type="OrderItem" doc:name="Create orderitems" doc:id="252af358-861a-4464-81bb-fc12866c7150" config-ref="Salesforce_Config" target="createOrderItemResponse">
+            <salesforce:records><![CDATA[#[flatten(payload)]]]></salesforce:records>
+        </salesforce:create>
+        <logger level="INFO" doc:name="Log call response" doc:id="889d0e52-fac9-4a1a-8be9-30fbb1dcd7a8" message="vars.createOrderItemResponse=#[output application/json --- vars.createOrderItemResponse]" />
+    </sub-flow>
+</mule>

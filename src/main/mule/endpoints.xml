@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core"
+    xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+	<flow name="endpointsFlow" doc:id="dac12012-1057-47d3-9435-951ff5049b1d">
+        <scheduler doc:name="Scheduler" doc:id="a81aea6b-90e8-486d-a16c-c63f5eee8813" >
+			<scheduling-strategy >
+				<fixed-frequency frequency="${scheduler.frequency}" startDelay="${scheduler.start.delay}" />
+			</scheduling-strategy>
+		</scheduler>
+		<os:retrieve doc:name="Retrieve lastQueryTimestamp" doc:id="316360cb-caf9-4961-9372-69ef3ba30ea9" key="watermark" objectStore="Object_store" target="lastQueryTimestamp">
+			<os:default-value ><![CDATA[#[p('watermark.default.expression')]]]></os:default-value>
+		</os:retrieve>
+		<logger level="INFO" doc:name="Logger" doc:id="ae66e4a4-21d0-4648-ae8b-8516fe76395d" message="Broadcast data from #[vars.lastQueryTimestamp as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSS&quot;}]"/>
+		<flow-ref doc:name="Call mainFlow" doc:id="de7dc394-b686-4519-8d48-4602dfa9c709" name="mainFlow" />
+        <ee:transform doc:name="Build response" doc:id="1456e717-fae2-4c21-9104-93c1d1f13588">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+ ---
+ {
+ 	Message: "Batch Process initiated",
+ 	ID: payload.id,
+ 	RecordCount: payload.recordCount,
+ 	StartExecutionOn: payload.creationTime as DateTime
+ }
+ ]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+</mule>
